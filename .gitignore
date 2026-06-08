@@ -1,7 +1,33 @@
-.venv
-.vscode
-__pycache__
+# Python
+.venv/
+__pycache__/
 *.pyc
-.idea
-.DS_Store
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.python-version
+
+# uv
+# uv.lock is intentionally committed for reproducibility
+
+# Data (raw/processed data kept out of VCS — store in DVC or shared drive)
 data/
+
+# Results (generated artifacts — regenerate with the pipeline)
+results/
+
+# Jupyter
+notebooks/.ipynb_checkpoints/
+.jupyter/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
