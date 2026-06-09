@@ -34,13 +34,15 @@ uv add --dev <package>   # dev-only (pytest, jupyterlab, etc.)
 
 ## Architecture
 
-The pipeline is linear: M1 builds the fingerprint DB from `data/raw/`, M2 runs WKNN localization, M3 evaluates against ground truth, M4 generates charts. All intermediate artifacts are saved to `data/processed/` and `results/`.
+The pipeline is linear: M0 performs EDA and splits the data, M1 builds the fingerprint DB from training records, M2 runs WKNN localization on test records, M3 evaluates, M4 generates charts. All intermediate artifacts are saved to `data/processed/` and `results/`.
 
 ```
-data/raw/measurement_data.csv  →  M1 (src/build_fp_db.py)   →  data/processed/fp_db.parquet
-                                   M2 (src/localize_mr.py)   →  data/processed/mr_located.parquet
-                                   M3 (src/evaluate.py)      →  results/metrics.json
-                                   M4 (src/visualize.py)     →  results/*.png, results/maps/
+data/raw/measurement_data.csv  →  M0 (notebooks/00_eda.ipynb)      →  data/processed/measurement_data_train.parquet
+                                                                        data/processed/measurement_data_test.parquet
+                                   M1 (src/build_fp_db.py)          →  data/processed/fp_db.parquet
+                                   M2 (src/localize_mr.py)          →  data/processed/mr_located.parquet
+                                   M3 (src/evaluate.py)             →  results/metrics.json
+                                   M4 (src/visualize.py)            →  results/*.png, results/maps/
 ```
 
 ## Key Data Concepts
@@ -49,16 +51,17 @@ data/raw/measurement_data.csv  →  M1 (src/build_fp_db.py)   →  data/processe
 
 **Query simulation:** group by `(ue_id, date)` to reconstruct a single measurement event — the analog of one real MR.
 
-**Train/test split is by UE** (not by row) using `GroupShuffleSplit(test_size=0.2, random_state=42, groups=ue_id)`. This prevents leakage where positions from the same UE appear in both sets.
+**Train/test split is performed in M0** (`00_eda.ipynb`) **by UE** (not by row) using `GroupShuffleSplit(test_size=0.2, random_state=42, groups=ue_id)`. This prevents leakage where positions from the same UE appear in both sets. The split outputs `measurement_data_train.parquet` (consumed by M1 to build `fp_db`) and `measurement_data_test.parquet` (consumed by M2 as query events).
 
-**Data quality:** filter 6 records where `rsrp == 0` (simulation artifacts) before any processing.
+**Data quality:** filter 6 records where `rsrp == 0` (simulation artifacts) before any processing. Performed in M0.
 
 ## Module Responsibilities
 
 | Module | Input | Output | Key logic |
 |---|---|---|---|
-| `src/build_fp_db.py` | `measurement_data.csv`, `gcell_conf.csv` | `fp_db.parquet` | pivot + fillna(-120) + save |
-| `src/localize_mr.py` | `fp_db.parquet`, query records | `mr_located.parquet` | `KNeighborsRegressor(weights='distance')`, K as CLI arg |
+| `notebooks/00_eda.ipynb` | `measurement_data.csv`, `gcell_conf.csv` | `measurement_data_train.parquet`, `measurement_data_test.parquet` | EDA + GroupShuffleSplit by ue_id |
+| `src/build_fp_db.py` | `measurement_data_train.parquet` | `fp_db.parquet` | pivot + fillna(-120) + save |
+| `src/localize_mr.py` | `fp_db.parquet`, `measurement_data_train.parquet`, `measurement_data_test.parquet` | `mr_located.parquet` | `KNeighborsRegressor(weights='distance')`, K as CLI arg |
 | `src/evaluate.py` | `mr_located.parquet` | `results/metrics.json` | Euclidean error, CEP50/90, RMSE, sweep K ∈ {1,3,5,7,9,15} |
 | `src/visualize.py` | `mr_located.parquet`, `gcell_conf.csv` | PNG/HTML charts | coverage map, error map, CDF, error-vs-K |
 

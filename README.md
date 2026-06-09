@@ -93,21 +93,25 @@ measurement_data.csv
         │
         ▼
 ┌─────────────────────┐
-│  M0 · EDA           │  Understand data distributions, check cell ID
-│                     │  overlap, decide fill value for missing cells
-└────────┬────────────┘
+│  M0 · EDA &         │  EDA — distributions, network topology, PCA
+│       Data Split    │  Filter rsrp==0 artefacts
+│  00_eda             │  GroupShuffleSplit by ue_id (80/20)
+│                     │  → measurement_data_train.parquet
+└────────┬────────────┘  → measurement_data_test.parquet
          │
          ▼
 ┌─────────────────────┐
-│  M1 · Fingerprint   │  Pivot long → wide format
+│  M1 · Fingerprint   │  Pivot long → wide format (train records only)
 │       Database      │  One row per (sim_x, sim_y), 26 RSRP columns
-└────────┬────────────┘  Fill missing cells with −120 dBm
+│  01_build_fp_db     │  Fill missing cells with −120 dBm
+└────────┬────────────┘  → fp_db.parquet
          │
          ▼
 ┌─────────────────────┐
-│  M2 · WKNN          │  Build query vector from each MR
+│  M2 · WKNN          │  Build query vector from each MR (test records)
 │       Localization  │  Find K nearest fingerprints by Euclidean distance
-└────────┬────────────┘  Weighted average of K positions → (est_x, est_y)
+│  02_localize_mr     │  Weighted average of K positions → (est_x, est_y)
+└────────┬────────────┘  → mr_located.parquet
          │
          ▼
 ┌─────────────────────┐
@@ -149,15 +153,20 @@ where w_i = 1 / distance_i   (inverse distance weighting)
 
 ### Train / Test Split
 
-To avoid data leakage, split is performed **by UE** using `GroupShuffleSplit`:
+Performed in **M0** (`00_eda.ipynb`) **by UE** using `GroupShuffleSplit` to prevent positional leakage:
 
 ```python
 from sklearn.model_selection import GroupShuffleSplit
-gss = GroupShuffleSplit(test_size=0.2, random_state=42)
-train_idx, test_idx = next(gss.split(data, groups=data['ue_id']))
+gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
+train_idx, test_idx = next(gss.split(measurement_df_clean, groups=measurement_df_clean['ue_id']))
 ```
 
-This ensures that positions seen during training are not used in evaluation — a UE's trajectory does not appear in both sets.
+This ensures a UE's trajectory does not appear in both sets. The outputs are:
+
+| File | Usage |
+|---|---|
+| `measurement_data_train.parquet` | M1 builds the fingerprint DB from these records |
+| `measurement_data_test.parquet` | M2 reconstructs test query events from these records |
 
 ---
 
@@ -176,11 +185,15 @@ mr-localization/
 │   │   ├── gcell_conf.csv
 │   │   └── measurement_data.csv
 │   └── processed/             # Generated files (not committed to Git)
-│       ├── fp_db.parquet      # Fingerprint database (wide format)
-│       └── mr_located.parquet # MR records with estimated positions
+│       ├── measurement_data_train.parquet  # Training UE records (from M0)
+│       ├── measurement_data_test.parquet   # Test UE records (from M0)
+│       ├── fp_db.parquet                   # Fingerprint database (from M1)
+│       └── mr_located.parquet             # MR records with estimated positions (from M2)
 │
 ├── notebooks/
-│   └── 00_eda.ipynb           # Exploratory data analysis
+│   ├── 00_eda.ipynb           # M0 — EDA + train/test split
+│   ├── 01_build_fp_db.ipynb   # M1 — build fingerprint database from train records
+│   └── 02_localize_mr.ipynb   # M2 — WKNN localization on test records
 │
 ├── src/
 │   ├── __init__.py
@@ -263,10 +276,17 @@ uv run python src/evaluate.py
 uv run python src/visualize.py
 ```
 
-### Run EDA notebook
+### Run notebooks
 
 ```bash
+# M0 — EDA + train/test split (run first)
 uv run jupyter lab notebooks/00_eda.ipynb
+
+# M1 — Build fingerprint database
+uv run jupyter lab notebooks/01_build_fp_db.ipynb
+
+# M2 — WKNN localization
+uv run jupyter lab notebooks/02_localize_mr.ipynb
 ```
 
 ### Run tests
